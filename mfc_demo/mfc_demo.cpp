@@ -57,6 +57,8 @@ enum GameState {
     GAME_PLAYING,
     GAME_CHECK_WHITE,
     GAME_CHECK_BLACK,
+    GAME_WHITE_WINS,
+    GAME_BLACK_WINS,
     GAME_CHECKMATE_WHITE,
     GAME_CHECKMATE_BLACK,
     GAME_STALEMATE
@@ -113,11 +115,11 @@ bool IsKingInCheck(ChessColor color);
 bool IsCheckmate(ChessColor color);
 bool IsStalemate(ChessColor color);
 bool IsMoveValid(int fromRow, int fromCol, int toRow, int toCol);
-void MakeMove(int fromRow, int fromCol, int toRow, int toCol);
+bool MakeMove(int fromRow, int fromCol, int toRow, int toCol);
 void UpdateGameState();
 void CreateBuffer(HWND hWnd);
 void DestroyBuffer();
-void AITurn();
+bool AITurn();
 int EvaluatePosition();
 int EvaluatePiece(ChessPieceType type);
 bool CanPromote(int row, ChessPieceType type, ChessColor color);
@@ -276,7 +278,7 @@ void GetValidMoves(int row, int col, std::vector<Position>& moves)
     if (piece.type == EMPTY)
         return;
 
-    GetValidMoves_Internal(row, col, moves, true);
+    GetValidMoves_Internal(row, col, moves, false);
 }
 
 void GetValidMoves_Internal(int row, int col, std::vector<Position>& moves, bool checkKingSafety)
@@ -653,28 +655,14 @@ bool IsMoveValid(int fromRow, int fromCol, int toRow, int toCol)
         }
     }
 
-    ChessPiece originalFrom = GetPiece(fromRow, fromCol);
-    ChessPiece originalTo = GetPiece(toRow, toCol);
-    Position originalWhiteKing = g_whiteKingPos;
-    Position originalBlackKing = g_blackKingPos;
-
-    SetPiece(toRow, toCol, fromPiece);
-    SetPiece(fromRow, fromCol, ChessPiece());
-
-    bool inCheck = IsKingInCheck(fromPiece.color);
-
-    SetPiece(fromRow, fromCol, originalFrom);
-    SetPiece(toRow, toCol, originalTo);
-    g_whiteKingPos = originalWhiteKing;
-    g_blackKingPos = originalBlackKing;
-
-    return !inCheck;
+    return true;
 }
 
-void MakeMove(int fromRow, int fromCol, int toRow, int toCol)
+bool MakeMove(int fromRow, int fromCol, int toRow, int toCol)
 {
     ChessPiece piece = GetPiece(fromRow, fromCol);
     ChessPiece captured = GetPiece(toRow, toCol);
+    bool capturedKing = (captured.type == KING);
 
     if (piece.type == KING && abs(toCol - fromCol) == 2)
     {
@@ -707,6 +695,8 @@ void MakeMove(int fromRow, int fromCol, int toRow, int toCol)
     g_lastMovedFrom = Position(fromRow, fromCol);
     g_lastMovedTo = Position(toRow, toCol);
     g_hasLastMove = true;
+
+    return capturedKing;
 }
 
 bool CanPromote(int row, ChessPieceType type, ChessColor color)
@@ -773,15 +763,7 @@ void UpdateGameState()
 
     ChessColor nextTurn = (g_currentTurn == WHITE) ? BLACK : WHITE;
 
-    if (IsCheckmate(nextTurn))
-    {
-        g_gameState = (nextTurn == WHITE) ? GAME_CHECKMATE_WHITE : GAME_CHECKMATE_BLACK;
-    }
-    else if (IsStalemate(nextTurn))
-    {
-        g_gameState = GAME_STALEMATE;
-    }
-    else if (IsKingInCheck(nextTurn))
+    if (IsKingInCheck(nextTurn))
     {
         g_gameState = (nextTurn == WHITE) ? GAME_CHECK_WHITE : GAME_CHECK_BLACK;
     }
@@ -899,66 +881,80 @@ void DrawPiece(HDC hdc, int row, int col, ChessPiece piece)
     int x = BOARD_OFFSET + col * CELL_SIZE;
     int y = BOARD_OFFSET + row * CELL_SIZE;
 
-    TCHAR symbol = ' ';
-    COLORREF color;
+    const TCHAR* symbol = _T("");
+    COLORREF textColor;
+    COLORREF bgColor;
 
     switch (piece.type)
     {
     case KING:
-        symbol = (piece.color == WHITE) ? _T('K') : _T('k');
+        symbol = _T("王");
         break;
     case QUEEN:
-        symbol = (piece.color == WHITE) ? _T('Q') : _T('q');
+        symbol = _T("后");
         break;
     case ROOK:
-        symbol = (piece.color == WHITE) ? _T('R') : _T('r');
+        symbol = _T("车");
         break;
     case BISHOP:
-        symbol = (piece.color == WHITE) ? _T('B') : _T('b');
+        symbol = _T("象");
         break;
     case KNIGHT:
-        symbol = (piece.color == WHITE) ? _T('N') : _T('n');
+        symbol = _T("马");
         break;
     case PAWN:
-        symbol = (piece.color == WHITE) ? _T('P') : _T('p');
+        symbol = _T("兵");
         break;
     }
-
-    color = (piece.color == WHITE) ? RGB(255, 255, 255) : RGB(0, 0, 0);
-
-    HFONT hFont = CreateFont(40, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                              CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-                              DEFAULT_PITCH | FF_DONTCARE, _T("Arial"));
-
-    HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
-    SetBkMode(hdc, TRANSPARENT);
 
     if (piece.color == WHITE)
     {
-        SetTextColor(hdc, RGB(255, 255, 255));
-        for (int dx = -1; dx <= 1; dx++)
-        {
-            for (int dy = -1; dy <= 1; dy++)
-            {
-                if (dx != 0 || dy != 0)
-                {
-                    SetTextColor(hdc, RGB(0, 0, 0));
-                    TextOut(hdc, x + CELL_SIZE / 2 - 12 + dx, y + CELL_SIZE / 2 - 18 + dy, &symbol, 1);
-                }
-            }
-        }
-        SetTextColor(hdc, RGB(255, 255, 255));
+        textColor = RGB(200, 0, 0);
+        bgColor = RGB(255, 240, 220);
     }
     else
     {
-        SetTextColor(hdc, RGB(0, 0, 0));
+        textColor = RGB(0, 80, 0);
+        bgColor = RGB(220, 240, 255);
     }
 
-    TextOut(hdc, x + CELL_SIZE / 2 - 12, y + CELL_SIZE / 2 - 18, &symbol, 1);
+    int circleRadius = CELL_SIZE / 2 - 5;
+    int centerX = x + CELL_SIZE / 2;
+    int centerY = y + CELL_SIZE / 2;
+
+    HBRUSH hBrush = CreateSolidBrush(bgColor);
+    HPEN hPen = CreatePen(PS_SOLID, 2, RGB(100, 100, 100));
+
+    HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hBrush);
+    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+
+    Ellipse(hdc, centerX - circleRadius, centerY - circleRadius,
+            centerX + circleRadius, centerY + circleRadius);
+
+    HFONT hFont = CreateFont(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                              GB2312_CHARSET, OUT_DEFAULT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                              DEFAULT_PITCH | FF_DONTCARE, _T("宋体"));
+
+    HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, textColor);
+
+    SIZE textSize;
+    GetTextExtentPoint32(hdc, symbol, 1, &textSize);
+
+    int textX = centerX - textSize.cx / 2;
+    int textY = centerY - textSize.cy / 2;
+
+    TextOut(hdc, textX, textY, symbol, 1);
 
     SelectObject(hdc, hOldFont);
+    SelectObject(hdc, hOldBrush);
+    SelectObject(hdc, hOldPen);
+
     DeleteObject(hFont);
+    DeleteObject(hBrush);
+    DeleteObject(hPen);
 }
 
 void DrawValidMoves(HDC hdc)
@@ -1045,6 +1041,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (g_gameState == GAME_CHECKMATE_WHITE ||
                 g_gameState == GAME_CHECKMATE_BLACK ||
                 g_gameState == GAME_STALEMATE ||
+                g_gameState == GAME_WHITE_WINS ||
+                g_gameState == GAME_BLACK_WINS ||
                 g_gameState == GAME_NOT_STARTED)
             {
                 break;
@@ -1085,45 +1083,41 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
                 if (isValidMove)
                 {
-                    MakeMove(g_selectedPos.row, g_selectedPos.col, row, col);
+                    bool capturedKing = MakeMove(g_selectedPos.row, g_selectedPos.col, row, col);
                     g_hasSelection = false;
                     g_validMoves.clear();
+
+                    if (capturedKing)
+                    {
+                        g_gameState = (g_currentTurn == WHITE) ? GAME_WHITE_WINS : GAME_BLACK_WINS;
+                        InvalidateRect(hWnd, NULL, FALSE);
+                        if (g_currentTurn == WHITE)
+                        {
+                            MessageBox(hWnd, _T("白方获胜！黑方王被吃掉。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                        }
+                        else
+                        {
+                            MessageBox(hWnd, _T("黑方获胜！白方王被吃掉。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                        }
+                        break;
+                    }
 
                     g_currentTurn = (g_currentTurn == WHITE) ? BLACK : WHITE;
                     UpdateGameState();
 
                     InvalidateRect(hWnd, NULL, FALSE);
 
-                    if (g_gameState == GAME_CHECKMATE_WHITE)
+                    if (g_gameMode == MODE_AI && g_currentTurn == BLACK)
                     {
-                        MessageBox(hWnd, _T("黑方获胜！白方被将死。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
-                    }
-                    else if (g_gameState == GAME_CHECKMATE_BLACK)
-                    {
-                        MessageBox(hWnd, _T("白方获胜！黑方被将死。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
-                    }
-                    else if (g_gameState == GAME_STALEMATE)
-                    {
-                        MessageBox(hWnd, _T("和棋！无子可动。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
-                    }
-                    else if (g_gameMode == MODE_AI && g_currentTurn == BLACK)
-                    {
-                        AITurn();
+                        bool aiCapturedKing = AITurn();
                         g_currentTurn = WHITE;
                         UpdateGameState();
                         InvalidateRect(hWnd, NULL, FALSE);
 
-                        if (g_gameState == GAME_CHECKMATE_WHITE)
+                        if (aiCapturedKing)
                         {
-                            MessageBox(hWnd, _T("黑方获胜！白方被将死。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
-                        }
-                        else if (g_gameState == GAME_CHECKMATE_BLACK)
-                        {
-                            MessageBox(hWnd, _T("白方获胜！黑方被将死。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
-                        }
-                        else if (g_gameState == GAME_STALEMATE)
-                        {
-                            MessageBox(hWnd, _T("和棋！无子可动。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                            g_gameState = GAME_BLACK_WINS;
+                            MessageBox(hWnd, _T("黑方获胜！白方王被吃掉。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
                         }
                     }
                 }
@@ -1343,7 +1337,7 @@ int EvaluatePiece(ChessPieceType type)
     }
 }
 
-void AITurn()
+bool AITurn()
 {
     std::vector<std::pair<Position, Position>> allMoves;
 
@@ -1365,7 +1359,7 @@ void AITurn()
     }
 
     if (allMoves.empty())
-        return;
+        return false;
 
     int bestScore = -100000;
     std::pair<Position, Position> bestMove = allMoves[0];
@@ -1420,5 +1414,29 @@ void AITurn()
         }
     }
 
-    MakeMove(bestMove.first.row, bestMove.first.col, bestMove.second.row, bestMove.second.col);
+    const TCHAR* pieceNames[] = { _T(""), _T("兵"), _T("车"), _T("马"), _T("象"), _T("后"), _T("王") };
+    ChessPiece movingPiece = GetPiece(bestMove.first.row, bestMove.first.col);
+    const TCHAR* pieceName = _T("");
+    if (movingPiece.type >= PAWN && movingPiece.type <= KING)
+    {
+        pieceName = pieceNames[movingPiece.type];
+    }
+
+    TCHAR fromColChar = _T('a') + bestMove.first.col;
+    TCHAR fromRowChar = _T('8') - bestMove.first.row;
+    TCHAR toColChar = _T('a') + bestMove.second.col;
+    TCHAR toRowChar = _T('8') - bestMove.second.row;
+
+    TCHAR message[256];
+    StringCchPrintf(message, 256, _T("电脑移动：%s 从 %c%c 到 %c%c"),
+        pieceName, fromColChar, fromRowChar, toColChar, toRowChar);
+
+    bool capturedKing = MakeMove(bestMove.first.row, bestMove.first.col, bestMove.second.row, bestMove.second.col);
+
+    if (!capturedKing)
+    {
+        MessageBox(GetForegroundWindow(), message, _T("电脑回合"), MB_OK | MB_ICONINFORMATION);
+    }
+
+    return capturedKing;
 }
