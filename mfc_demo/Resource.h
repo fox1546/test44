@@ -13,6 +13,10 @@
 #define IDI_SMALL				108
 #define IDC_MFCDEMO			109
 #define IDC_MYICON				2
+#define IDM_GAME_START			32771
+#define IDM_GAME_CONFIG			32772
+#define IDM_MODE_HUMAN			32773
+#define IDM_MODE_AI			32774
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1
 #endif
@@ -23,7 +27,7 @@
 
 #define _APS_NO_MFC					130
 #define _APS_NEXT_RESOURCE_VALUE	129
-#define _APS_NEXT_COMMAND_VALUE		32771
+#define _APS_NEXT_COMMAND_VALUE		32775
 #define _APS_NEXT_CONTROL_VALUE		1000
 #define _APS_NEXT_SYMED_VALUE		110
 #endif
