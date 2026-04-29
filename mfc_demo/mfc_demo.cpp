@@ -3,19 +3,124 @@
 
 #include "framework.h"
 #include "mfc_demo.h"
+#include <vector>
+#include <algorithm>
+#include <cstdlib>
+#include <ctime>
 
 #define MAX_LOADSTRING 100
 
-// 全局变量:
-HINSTANCE hInst;                                // 当前实例
-WCHAR szTitle[MAX_LOADSTRING];                  // 标题栏文本
-WCHAR szWindowClass[MAX_LOADSTRING];            // 主窗口类名
+enum ChessPieceType {
+    EMPTY = 0,
+    PAWN,
+    ROOK,
+    KNIGHT,
+    BISHOP,
+    QUEEN,
+    KING
+};
 
-// 此代码模块中包含的函数的前向声明:
+enum ChessColor {
+    WHITE = 0,
+    BLACK,
+    NO_COLOR
+};
+
+struct ChessPiece {
+    ChessPieceType type;
+    ChessColor color;
+    bool hasMoved;
+
+    ChessPiece() : type(EMPTY), color(NO_COLOR), hasMoved(false) {}
+    ChessPiece(ChessPieceType t, ChessColor c) : type(t), color(c), hasMoved(false) {}
+};
+
+struct Position {
+    int row;
+    int col;
+
+    Position() : row(0), col(0) {}
+    Position(int r, int c) : row(r), col(c) {}
+
+    bool operator==(const Position& other) const {
+        return row == other.row && col == other.col;
+    }
+};
+
+enum GameMode {
+    MODE_TWO_PLAYER,
+    MODE_AI
+};
+
+enum GameState {
+    GAME_NOT_STARTED,
+    GAME_PLAYING,
+    GAME_CHECK_WHITE,
+    GAME_CHECK_BLACK,
+    GAME_CHECKMATE_WHITE,
+    GAME_CHECKMATE_BLACK,
+    GAME_STALEMATE
+};
+
+HINSTANCE hInst;
+WCHAR szTitle[MAX_LOADSTRING];
+WCHAR szWindowClass[MAX_LOADSTRING];
+
+const int BOARD_SIZE = 8;
+const int CELL_SIZE = 60;
+const int BOARD_OFFSET = 30;
+
+ChessPiece g_board[BOARD_SIZE][BOARD_SIZE];
+ChessColor g_currentTurn;
+GameMode g_gameMode;
+GameState g_gameState;
+Position g_selectedPos;
+bool g_hasSelection;
+std::vector<Position> g_validMoves;
+HBITMAP g_hBitmapBuffer;
+HDC g_hdcBuffer;
+bool g_bBufferCreated;
+Position g_lastMovedFrom;
+Position g_lastMovedTo;
+bool g_hasLastMove;
+Position g_whiteKingPos;
+Position g_blackKingPos;
+
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK    ConfigDlgProc(HWND, UINT, WPARAM, LPARAM);
+
+void InitGame();
+void ResetBoard();
+void DrawBoard(HDC hdc);
+void DrawPiece(HDC hdc, int row, int col, ChessPiece piece);
+void DrawValidMoves(HDC hdc);
+bool IsValidPosition(int row, int col);
+ChessPiece GetPiece(int row, int col);
+void SetPiece(int row, int col, ChessPiece piece);
+void GetValidMoves(int row, int col, std::vector<Position>& moves);
+void GetValidMoves_Internal(int row, int col, std::vector<Position>& moves, bool checkKingSafety);
+void GetPawnMoves(int row, int col, std::vector<Position>& moves);
+void GetRookMoves(int row, int col, std::vector<Position>& moves);
+void GetKnightMoves(int row, int col, std::vector<Position>& moves);
+void GetBishopMoves(int row, int col, std::vector<Position>& moves);
+void GetQueenMoves(int row, int col, std::vector<Position>& moves);
+void GetKingMoves(int row, int col, std::vector<Position>& moves);
+bool IsPathClear(int fromRow, int fromCol, int toRow, int toCol);
+bool IsKingInCheck(ChessColor color);
+bool IsCheckmate(ChessColor color);
+bool IsStalemate(ChessColor color);
+bool IsMoveValid(int fromRow, int fromCol, int toRow, int toCol);
+void MakeMove(int fromRow, int fromCol, int toRow, int toCol);
+void UpdateGameState();
+void CreateBuffer(HWND hWnd);
+void DestroyBuffer();
+void AITurn();
+int EvaluatePosition();
+int EvaluatePiece(ChessPieceType type);
+bool CanPromote(int row, ChessPieceType type, ChessColor color);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -25,15 +130,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-    // TODO: 在此处放置代码。
+    srand((unsigned int)time(NULL));
 
-    // 初始化全局字符串
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_MFCDEMO, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
 
-    // 执行应用程序初始化:
-    if (!InitInstance (hInstance, nCmdShow))
+    if (!InitInstance(hInstance, nCmdShow))
     {
         return FALSE;
     }
@@ -42,7 +145,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     MSG msg;
 
-    // 主消息循环:
     while (GetMessage(&msg, nullptr, 0, 0))
     {
         if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
@@ -55,13 +157,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     return (int) msg.wParam;
 }
 
-
-
-//
-//  函数: MyRegisterClass()
-//
-//  目标: 注册窗口类。
-//
 ATOM MyRegisterClass(HINSTANCE hInstance)
 {
     WNDCLASSEXW wcex;
@@ -83,27 +178,26 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     return RegisterClassExW(&wcex);
 }
 
-//
-//   函数: InitInstance(HINSTANCE, int)
-//
-//   目标: 保存实例句柄并创建主窗口
-//
-//   注释:
-//
-//        在此函数中，我们在全局变量中保存实例句柄并
-//        创建和显示主程序窗口。
-//
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
-   hInst = hInstance; // 将实例句柄存储在全局变量中
+   hInst = hInstance;
+
+   int windowWidth = BOARD_OFFSET * 2 + CELL_SIZE * BOARD_SIZE + 40;
+   int windowHeight = BOARD_OFFSET * 2 + CELL_SIZE * BOARD_SIZE + 80;
 
    HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
-      CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
+      CW_USEDEFAULT, 0, windowWidth, windowHeight, nullptr, nullptr, hInstance, nullptr);
 
    if (!hWnd)
    {
       return FALSE;
    }
+
+   g_bBufferCreated = false;
+   g_gameMode = MODE_TWO_PLAYER;
+   g_gameState = GAME_NOT_STARTED;
+   g_hasSelection = false;
+   g_hasLastMove = false;
 
    ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
@@ -111,24 +205,820 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    return TRUE;
 }
 
-//
-//  函数: WndProc(HWND, UINT, WPARAM, LPARAM)
-//
-//  目标: 处理主窗口的消息。
-//
-//  WM_COMMAND  - 处理应用程序菜单
-//  WM_PAINT    - 绘制主窗口
-//  WM_DESTROY  - 发送退出消息并返回
-//
-//
+void InitGame()
+{
+    ResetBoard();
+    g_currentTurn = WHITE;
+    g_gameState = GAME_PLAYING;
+    g_hasSelection = false;
+    g_hasLastMove = false;
+    UpdateGameState();
+}
+
+void ResetBoard()
+{
+    for (int i = 0; i < BOARD_SIZE; i++)
+    {
+        for (int j = 0; j < BOARD_SIZE; j++)
+        {
+            g_board[i][j] = ChessPiece();
+        }
+    }
+
+    for (int i = 0; i < BOARD_SIZE; i++)
+    {
+        g_board[1][i] = ChessPiece(PAWN, BLACK);
+        g_board[6][i] = ChessPiece(PAWN, WHITE);
+    }
+
+    ChessPieceType backRow[] = {ROOK, KNIGHT, BISHOP, QUEEN, KING, BISHOP, KNIGHT, ROOK};
+    for (int i = 0; i < BOARD_SIZE; i++)
+    {
+        g_board[0][i] = ChessPiece(backRow[i], BLACK);
+        g_board[7][i] = ChessPiece(backRow[i], WHITE);
+    }
+
+    g_whiteKingPos = Position(7, 4);
+    g_blackKingPos = Position(0, 4);
+}
+
+bool IsValidPosition(int row, int col)
+{
+    return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
+}
+
+ChessPiece GetPiece(int row, int col)
+{
+    if (IsValidPosition(row, col))
+        return g_board[row][col];
+    return ChessPiece();
+}
+
+void SetPiece(int row, int col, ChessPiece piece)
+{
+    if (IsValidPosition(row, col))
+    {
+        g_board[row][col] = piece;
+        if (piece.type == KING)
+        {
+            if (piece.color == WHITE)
+                g_whiteKingPos = Position(row, col);
+            else if (piece.color == BLACK)
+                g_blackKingPos = Position(row, col);
+        }
+    }
+}
+
+void GetValidMoves(int row, int col, std::vector<Position>& moves)
+{
+    moves.clear();
+    ChessPiece piece = GetPiece(row, col);
+    if (piece.type == EMPTY)
+        return;
+
+    GetValidMoves_Internal(row, col, moves, true);
+}
+
+void GetValidMoves_Internal(int row, int col, std::vector<Position>& moves, bool checkKingSafety)
+{
+    ChessPiece piece = GetPiece(row, col);
+    if (piece.type == EMPTY)
+        return;
+
+    std::vector<Position> tempMoves;
+
+    switch (piece.type)
+    {
+    case PAWN:
+        GetPawnMoves(row, col, tempMoves);
+        break;
+    case ROOK:
+        GetRookMoves(row, col, tempMoves);
+        break;
+    case KNIGHT:
+        GetKnightMoves(row, col, tempMoves);
+        break;
+    case BISHOP:
+        GetBishopMoves(row, col, tempMoves);
+        break;
+    case QUEEN:
+        GetQueenMoves(row, col, tempMoves);
+        break;
+    case KING:
+        GetKingMoves(row, col, tempMoves);
+        break;
+    }
+
+    if (checkKingSafety)
+    {
+        for (size_t i = 0; i < tempMoves.size(); i++)
+        {
+            Position to = tempMoves[i];
+            if (IsMoveValid(row, col, to.row, to.col))
+            {
+                moves.push_back(to);
+            }
+        }
+    }
+    else
+    {
+        moves = tempMoves;
+    }
+}
+
+void GetPawnMoves(int row, int col, std::vector<Position>& moves)
+{
+    ChessPiece piece = GetPiece(row, col);
+    if (piece.type != PAWN)
+        return;
+
+    int direction = (piece.color == WHITE) ? -1 : 1;
+    int startRow = (piece.color == WHITE) ? 6 : 1;
+
+    int newRow = row + direction;
+    if (IsValidPosition(newRow, col))
+    {
+        ChessPiece ahead = GetPiece(newRow, col);
+        if (ahead.type == EMPTY)
+        {
+            moves.push_back(Position(newRow, col));
+
+            if (row == startRow)
+            {
+                int doubleRow = row + 2 * direction;
+                ChessPiece doubleAhead = GetPiece(doubleRow, col);
+                if (doubleAhead.type == EMPTY)
+                {
+                    moves.push_back(Position(doubleRow, col));
+                }
+            }
+        }
+    }
+
+    int captureCols[] = {col - 1, col + 1};
+    for (int i = 0; i < 2; i++)
+    {
+        int newCol = captureCols[i];
+        if (IsValidPosition(newRow, newCol))
+        {
+            ChessPiece target = GetPiece(newRow, newCol);
+            if (target.type != EMPTY && target.color != piece.color)
+            {
+                moves.push_back(Position(newRow, newCol));
+            }
+        }
+    }
+}
+
+void GetRookMoves(int row, int col, std::vector<Position>& moves)
+{
+    ChessPiece piece = GetPiece(row, col);
+    int directions[4][2] = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}};
+
+    for (int d = 0; d < 4; d++)
+    {
+        int newRow = row + directions[d][0];
+        int newCol = col + directions[d][1];
+
+        while (IsValidPosition(newRow, newCol))
+        {
+            ChessPiece target = GetPiece(newRow, newCol);
+            if (target.type == EMPTY)
+            {
+                moves.push_back(Position(newRow, newCol));
+            }
+            else
+            {
+                if (target.color != piece.color)
+                {
+                    moves.push_back(Position(newRow, newCol));
+                }
+                break;
+            }
+            newRow += directions[d][0];
+            newCol += directions[d][1];
+        }
+    }
+}
+
+void GetKnightMoves(int row, int col, std::vector<Position>& moves)
+{
+    ChessPiece piece = GetPiece(row, col);
+    int offsets[8][2] = {{2, 1}, {2, -1}, {-2, 1}, {-2, -1},
+                          {1, 2}, {1, -2}, {-1, 2}, {-1, -2}};
+
+    for (int i = 0; i < 8; i++)
+    {
+        int newRow = row + offsets[i][0];
+        int newCol = col + offsets[i][1];
+
+        if (IsValidPosition(newRow, newCol))
+        {
+            ChessPiece target = GetPiece(newRow, newCol);
+            if (target.type == EMPTY || target.color != piece.color)
+            {
+                moves.push_back(Position(newRow, newCol));
+            }
+        }
+    }
+}
+
+void GetBishopMoves(int row, int col, std::vector<Position>& moves)
+{
+    ChessPiece piece = GetPiece(row, col);
+    int directions[4][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+
+    for (int d = 0; d < 4; d++)
+    {
+        int newRow = row + directions[d][0];
+        int newCol = col + directions[d][1];
+
+        while (IsValidPosition(newRow, newCol))
+        {
+            ChessPiece target = GetPiece(newRow, newCol);
+            if (target.type == EMPTY)
+            {
+                moves.push_back(Position(newRow, newCol));
+            }
+            else
+            {
+                if (target.color != piece.color)
+                {
+                    moves.push_back(Position(newRow, newCol));
+                }
+                break;
+            }
+            newRow += directions[d][0];
+            newCol += directions[d][1];
+        }
+    }
+}
+
+void GetQueenMoves(int row, int col, std::vector<Position>& moves)
+{
+    GetRookMoves(row, col, moves);
+    GetBishopMoves(row, col, moves);
+}
+
+void GetKingMoves(int row, int col, std::vector<Position>& moves)
+{
+    ChessPiece piece = GetPiece(row, col);
+    int directions[8][2] = {{0, 1}, {0, -1}, {1, 0}, {-1, 0},
+                             {1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+
+    for (int d = 0; d < 8; d++)
+    {
+        int newRow = row + directions[d][0];
+        int newCol = col + directions[d][1];
+
+        if (IsValidPosition(newRow, newCol))
+        {
+            ChessPiece target = GetPiece(newRow, newCol);
+            if (target.type == EMPTY || target.color != piece.color)
+            {
+                moves.push_back(Position(newRow, newCol));
+            }
+        }
+    }
+
+    if (!piece.hasMoved)
+    {
+        int baseRow = (piece.color == WHITE) ? 7 : 0;
+
+        ChessPiece leftRook = GetPiece(baseRow, 0);
+        if (leftRook.type == ROOK && leftRook.color == piece.color && !leftRook.hasMoved)
+        {
+            if (GetPiece(baseRow, 1).type == EMPTY &&
+                GetPiece(baseRow, 2).type == EMPTY &&
+                GetPiece(baseRow, 3).type == EMPTY)
+            {
+                moves.push_back(Position(baseRow, 2));
+            }
+        }
+
+        ChessPiece rightRook = GetPiece(baseRow, 7);
+        if (rightRook.type == ROOK && rightRook.color == piece.color && !rightRook.hasMoved)
+        {
+            if (GetPiece(baseRow, 5).type == EMPTY &&
+                GetPiece(baseRow, 6).type == EMPTY)
+            {
+                moves.push_back(Position(baseRow, 6));
+            }
+        }
+    }
+}
+
+bool IsPathClear(int fromRow, int fromCol, int toRow, int toCol)
+{
+    if (fromRow != toRow && fromCol != toCol && abs(fromRow - toRow) != abs(fromCol - toCol))
+        return true;
+
+    int dRow = (toRow > fromRow) ? 1 : (toRow < fromRow) ? -1 : 0;
+    int dCol = (toCol > fromCol) ? 1 : (toCol < fromCol) ? -1 : 0;
+
+    int currRow = fromRow + dRow;
+    int currCol = fromCol + dCol;
+
+    while (currRow != toRow || currCol != toCol)
+    {
+        if (GetPiece(currRow, currCol).type != EMPTY)
+            return false;
+        currRow += dRow;
+        currCol += dCol;
+    }
+
+    return true;
+}
+
+bool IsKingInCheck(ChessColor color)
+{
+    Position kingPos;
+    if (color == WHITE)
+        kingPos = g_whiteKingPos;
+    else
+        kingPos = g_blackKingPos;
+
+    ChessColor enemyColor = (color == WHITE) ? BLACK : WHITE;
+
+    for (int row = 0; row < BOARD_SIZE; row++)
+    {
+        for (int col = 0; col < BOARD_SIZE; col++)
+        {
+            ChessPiece piece = GetPiece(row, col);
+            if (piece.color == enemyColor && piece.type != EMPTY)
+            {
+                std::vector<Position> moves;
+                GetValidMoves_Internal(row, col, moves, false);
+
+                for (size_t i = 0; i < moves.size(); i++)
+                {
+                    if (moves[i] == kingPos)
+                    {
+                        if (piece.type == KNIGHT || piece.type == KING)
+                        {
+                            return true;
+                        }
+                        else
+                        {
+                            if (IsPathClear(row, col, kingPos.row, kingPos.col))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+bool IsMoveValid(int fromRow, int fromCol, int toRow, int toCol)
+{
+    ChessPiece fromPiece = GetPiece(fromRow, fromCol);
+    if (fromPiece.type == EMPTY)
+        return false;
+
+    ChessPiece toPiece = GetPiece(toRow, toCol);
+    if (toPiece.type != EMPTY && toPiece.color == fromPiece.color)
+        return false;
+
+    if (fromPiece.type == PAWN)
+    {
+        int direction = (fromPiece.color == WHITE) ? -1 : 1;
+        if (toRow == fromRow + direction)
+        {
+            if (toCol == fromCol - 1 || toCol == fromCol + 1)
+            {
+                if (toPiece.type == EMPTY)
+                    return false;
+            }
+            else if (toCol == fromCol)
+            {
+                if (toPiece.type != EMPTY)
+                    return false;
+            }
+        }
+        else if (toRow == fromRow + 2 * direction)
+        {
+            if (toCol != fromCol)
+                return false;
+            int startRow = (fromPiece.color == WHITE) ? 6 : 1;
+            if (fromRow != startRow)
+                return false;
+        }
+    }
+
+    if (fromPiece.type == KING && abs(toCol - fromCol) == 2)
+    {
+        if (IsKingInCheck(fromPiece.color))
+            return false;
+
+        int baseRow = (fromPiece.color == WHITE) ? 7 : 0;
+        if (fromRow != baseRow)
+            return false;
+
+        ChessColor enemyColor = (fromPiece.color == WHITE) ? BLACK : WHITE;
+        int midCol = (fromCol + toCol) / 2;
+
+        for (int row = 0; row < BOARD_SIZE; row++)
+        {
+            for (int col = 0; col < BOARD_SIZE; col++)
+            {
+                ChessPiece enemy = GetPiece(row, col);
+                if (enemy.color == enemyColor && enemy.type != EMPTY)
+                {
+                    std::vector<Position> moves;
+                    GetValidMoves_Internal(row, col, moves, false);
+                    for (size_t i = 0; i < moves.size(); i++)
+                    {
+                        if (moves[i].row == baseRow && moves[i].col == midCol)
+                        {
+                            if (enemy.type != KNIGHT && enemy.type != KING)
+                            {
+                                if (IsPathClear(row, col, baseRow, midCol))
+                                {
+                                    return false;
+                                }
+                            }
+                            else
+                            {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ChessPiece originalFrom = GetPiece(fromRow, fromCol);
+    ChessPiece originalTo = GetPiece(toRow, toCol);
+    Position originalWhiteKing = g_whiteKingPos;
+    Position originalBlackKing = g_blackKingPos;
+
+    SetPiece(toRow, toCol, fromPiece);
+    SetPiece(fromRow, fromCol, ChessPiece());
+
+    bool inCheck = IsKingInCheck(fromPiece.color);
+
+    SetPiece(fromRow, fromCol, originalFrom);
+    SetPiece(toRow, toCol, originalTo);
+    g_whiteKingPos = originalWhiteKing;
+    g_blackKingPos = originalBlackKing;
+
+    return !inCheck;
+}
+
+void MakeMove(int fromRow, int fromCol, int toRow, int toCol)
+{
+    ChessPiece piece = GetPiece(fromRow, fromCol);
+    ChessPiece captured = GetPiece(toRow, toCol);
+
+    if (piece.type == KING && abs(toCol - fromCol) == 2)
+    {
+        int baseRow = (piece.color == WHITE) ? 7 : 0;
+        if (toCol == 2)
+        {
+            ChessPiece rook = GetPiece(baseRow, 0);
+            rook.hasMoved = true;
+            SetPiece(baseRow, 3, rook);
+            SetPiece(baseRow, 0, ChessPiece());
+        }
+        else if (toCol == 6)
+        {
+            ChessPiece rook = GetPiece(baseRow, 7);
+            rook.hasMoved = true;
+            SetPiece(baseRow, 5, rook);
+            SetPiece(baseRow, 7, ChessPiece());
+        }
+    }
+
+    if (CanPromote(toRow, piece.type, piece.color))
+    {
+        piece.type = QUEEN;
+    }
+
+    piece.hasMoved = true;
+    SetPiece(toRow, toCol, piece);
+    SetPiece(fromRow, fromCol, ChessPiece());
+
+    g_lastMovedFrom = Position(fromRow, fromCol);
+    g_lastMovedTo = Position(toRow, toCol);
+    g_hasLastMove = true;
+}
+
+bool CanPromote(int row, ChessPieceType type, ChessColor color)
+{
+    if (type != PAWN)
+        return false;
+    if (color == WHITE && row == 0)
+        return true;
+    if (color == BLACK && row == 7)
+        return true;
+    return false;
+}
+
+bool IsCheckmate(ChessColor color)
+{
+    if (!IsKingInCheck(color))
+        return false;
+
+    for (int row = 0; row < BOARD_SIZE; row++)
+    {
+        for (int col = 0; col < BOARD_SIZE; col++)
+        {
+            ChessPiece piece = GetPiece(row, col);
+            if (piece.color == color && piece.type != EMPTY)
+            {
+                std::vector<Position> moves;
+                GetValidMoves(row, col, moves);
+                if (!moves.empty())
+                    return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+bool IsStalemate(ChessColor color)
+{
+    if (IsKingInCheck(color))
+        return false;
+
+    for (int row = 0; row < BOARD_SIZE; row++)
+    {
+        for (int col = 0; col < BOARD_SIZE; col++)
+        {
+            ChessPiece piece = GetPiece(row, col);
+            if (piece.color == color && piece.type != EMPTY)
+            {
+                std::vector<Position> moves;
+                GetValidMoves(row, col, moves);
+                if (!moves.empty())
+                    return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+void UpdateGameState()
+{
+    if (g_gameState == GAME_NOT_STARTED)
+        return;
+
+    ChessColor nextTurn = (g_currentTurn == WHITE) ? BLACK : WHITE;
+
+    if (IsCheckmate(nextTurn))
+    {
+        g_gameState = (nextTurn == WHITE) ? GAME_CHECKMATE_WHITE : GAME_CHECKMATE_BLACK;
+    }
+    else if (IsStalemate(nextTurn))
+    {
+        g_gameState = GAME_STALEMATE;
+    }
+    else if (IsKingInCheck(nextTurn))
+    {
+        g_gameState = (nextTurn == WHITE) ? GAME_CHECK_WHITE : GAME_CHECK_BLACK;
+    }
+    else
+    {
+        g_gameState = GAME_PLAYING;
+    }
+}
+
+void CreateBuffer(HWND hWnd)
+{
+    if (g_bBufferCreated)
+        DestroyBuffer();
+
+    RECT rect;
+    GetClientRect(hWnd, &rect);
+
+    HDC hdc = GetDC(hWnd);
+    g_hdcBuffer = CreateCompatibleDC(hdc);
+    g_hBitmapBuffer = CreateCompatibleBitmap(hdc, rect.right - rect.left, rect.bottom - rect.top);
+    SelectObject(g_hdcBuffer, g_hBitmapBuffer);
+    ReleaseDC(hWnd, hdc);
+
+    g_bBufferCreated = true;
+}
+
+void DestroyBuffer()
+{
+    if (g_bBufferCreated)
+    {
+        DeleteObject(g_hBitmapBuffer);
+        DeleteDC(g_hdcBuffer);
+        g_bBufferCreated = false;
+    }
+}
+
+void DrawBoard(HDC hdc)
+{
+    for (int row = 0; row < BOARD_SIZE; row++)
+    {
+        for (int col = 0; col < BOARD_SIZE; col++)
+        {
+            int x = BOARD_OFFSET + col * CELL_SIZE;
+            int y = BOARD_OFFSET + row * CELL_SIZE;
+
+            COLORREF color;
+            if ((row + col) % 2 == 0)
+                color = RGB(240, 217, 181);
+            else
+                color = RGB(181, 136, 99);
+
+            HBRUSH hBrush = CreateSolidBrush(color);
+            RECT rect = {x, y, x + CELL_SIZE, y + CELL_SIZE};
+            FillRect(hdc, &rect, hBrush);
+            DeleteObject(hBrush);
+        }
+    }
+
+    if (g_hasLastMove)
+    {
+        for (int i = 0; i < 2; i++)
+        {
+            Position pos = (i == 0) ? g_lastMovedFrom : g_lastMovedTo;
+            int x = BOARD_OFFSET + pos.col * CELL_SIZE;
+            int y = BOARD_OFFSET + pos.row * CELL_SIZE;
+
+            COLORREF highlight = RGB(255, 255, 128);
+            HBRUSH hBrush = CreateSolidBrush(highlight);
+            SetBkMode(hdc, TRANSPARENT);
+
+            int alpha = 100;
+            BLENDFUNCTION blend = {AC_SRC_OVER, 0, alpha, 0};
+
+            HDC hdcTemp = CreateCompatibleDC(hdc);
+            HBITMAP hBitmapTemp = CreateCompatibleBitmap(hdc, CELL_SIZE, CELL_SIZE);
+            SelectObject(hdcTemp, hBitmapTemp);
+
+            SetBkColor(hdcTemp, highlight);
+            ExtTextOut(hdcTemp, 0, 0, ETO_OPAQUE, NULL, NULL, 0, NULL);
+
+            AlphaBlend(hdc, x, y, CELL_SIZE, CELL_SIZE, hdcTemp, 0, 0, CELL_SIZE, CELL_SIZE, blend);
+
+            DeleteObject(hBitmapTemp);
+            DeleteDC(hdcTemp);
+            DeleteObject(hBrush);
+        }
+    }
+
+    for (int i = 0; i < BOARD_SIZE; i++)
+    {
+        TCHAR colLabel[2] = {_T('a') + i, 0};
+        TCHAR rowLabel[2] = {_T('8') - i, 0};
+
+        int x = BOARD_OFFSET + i * CELL_SIZE + CELL_SIZE / 2 - 5;
+        int yTop = BOARD_OFFSET - 20;
+        int yBottom = BOARD_OFFSET + BOARD_SIZE * CELL_SIZE + 5;
+        int xLeft = BOARD_OFFSET - 20;
+        int xRight = BOARD_OFFSET + BOARD_SIZE * CELL_SIZE + 5;
+
+        SetTextColor(hdc, RGB(0, 0, 0));
+        SetBkMode(hdc, TRANSPARENT);
+
+        TextOut(hdc, x, yTop, colLabel, 1);
+        TextOut(hdc, x, yBottom, colLabel, 1);
+        TextOut(hdc, xLeft, BOARD_OFFSET + i * CELL_SIZE + CELL_SIZE / 2 - 7, rowLabel, 1);
+        TextOut(hdc, xRight, BOARD_OFFSET + i * CELL_SIZE + CELL_SIZE / 2 - 7, rowLabel, 1);
+    }
+}
+
+void DrawPiece(HDC hdc, int row, int col, ChessPiece piece)
+{
+    if (piece.type == EMPTY)
+        return;
+
+    int x = BOARD_OFFSET + col * CELL_SIZE;
+    int y = BOARD_OFFSET + row * CELL_SIZE;
+
+    TCHAR symbol = ' ';
+    COLORREF color;
+
+    switch (piece.type)
+    {
+    case KING:
+        symbol = (piece.color == WHITE) ? _T('K') : _T('k');
+        break;
+    case QUEEN:
+        symbol = (piece.color == WHITE) ? _T('Q') : _T('q');
+        break;
+    case ROOK:
+        symbol = (piece.color == WHITE) ? _T('R') : _T('r');
+        break;
+    case BISHOP:
+        symbol = (piece.color == WHITE) ? _T('B') : _T('b');
+        break;
+    case KNIGHT:
+        symbol = (piece.color == WHITE) ? _T('N') : _T('n');
+        break;
+    case PAWN:
+        symbol = (piece.color == WHITE) ? _T('P') : _T('p');
+        break;
+    }
+
+    color = (piece.color == WHITE) ? RGB(255, 255, 255) : RGB(0, 0, 0);
+
+    HFONT hFont = CreateFont(40, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                              DEFAULT_PITCH | FF_DONTCARE, _T("Arial"));
+
+    HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+    SetBkMode(hdc, TRANSPARENT);
+
+    if (piece.color == WHITE)
+    {
+        SetTextColor(hdc, RGB(255, 255, 255));
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                if (dx != 0 || dy != 0)
+                {
+                    SetTextColor(hdc, RGB(0, 0, 0));
+                    TextOut(hdc, x + CELL_SIZE / 2 - 12 + dx, y + CELL_SIZE / 2 - 18 + dy, &symbol, 1);
+                }
+            }
+        }
+        SetTextColor(hdc, RGB(255, 255, 255));
+    }
+    else
+    {
+        SetTextColor(hdc, RGB(0, 0, 0));
+    }
+
+    TextOut(hdc, x + CELL_SIZE / 2 - 12, y + CELL_SIZE / 2 - 18, &symbol, 1);
+
+    SelectObject(hdc, hOldFont);
+    DeleteObject(hFont);
+}
+
+void DrawValidMoves(HDC hdc)
+{
+    if (!g_hasSelection)
+        return;
+
+    int selX = BOARD_OFFSET + g_selectedPos.col * CELL_SIZE;
+    int selY = BOARD_OFFSET + g_selectedPos.row * CELL_SIZE;
+
+    HPEN hPen = CreatePen(PS_SOLID, 3, RGB(0, 128, 255));
+    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+    HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+
+    Rectangle(hdc, selX + 2, selY + 2, selX + CELL_SIZE - 2, selY + CELL_SIZE - 2);
+
+    for (size_t i = 0; i < g_validMoves.size(); i++)
+    {
+        Position pos = g_validMoves[i];
+        int x = BOARD_OFFSET + pos.col * CELL_SIZE;
+        int y = BOARD_OFFSET + pos.row * CELL_SIZE;
+
+        ChessPiece piece = GetPiece(pos.row, pos.col);
+        if (piece.type != EMPTY)
+        {
+            HPEN hCapPen = CreatePen(PS_SOLID, 3, RGB(255, 0, 0));
+            SelectObject(hdc, hCapPen);
+            Rectangle(hdc, x + 2, y + 2, x + CELL_SIZE - 2, y + CELL_SIZE - 2);
+            DeleteObject(hCapPen);
+        }
+        else
+        {
+            HBRUSH hBrush = CreateSolidBrush(RGB(0, 128, 255));
+            SelectObject(hdc, hBrush);
+            Ellipse(hdc, x + CELL_SIZE / 2 - 8, y + CELL_SIZE / 2 - 8,
+                    x + CELL_SIZE / 2 + 8, y + CELL_SIZE / 2 + 8);
+            DeleteObject(hBrush);
+        }
+    }
+
+    SelectObject(hdc, hOldPen);
+    SelectObject(hdc, hOldBrush);
+    DeleteObject(hPen);
+}
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
     {
+    case WM_CREATE:
+        CreateBuffer(hWnd);
+        break;
+
+    case WM_SIZE:
+        CreateBuffer(hWnd);
+        break;
+
     case WM_COMMAND:
         {
             int wmId = LOWORD(wParam);
-            // 分析菜单选择:
             switch (wmId)
             {
             case IDM_ABOUT:
@@ -137,29 +1027,229 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             case IDM_EXIT:
                 DestroyWindow(hWnd);
                 break;
+            case IDM_GAME_START:
+                InitGame();
+                InvalidateRect(hWnd, NULL, FALSE);
+                break;
+            case IDM_GAME_CONFIG:
+                DialogBox(hInst, MAKEINTRESOURCE(IDD_MFCDEMO_DIALOG), hWnd, ConfigDlgProc);
+                break;
             default:
                 return DefWindowProc(hWnd, message, wParam, lParam);
             }
         }
         break;
+
+    case WM_LBUTTONDOWN:
+        {
+            if (g_gameState == GAME_CHECKMATE_WHITE ||
+                g_gameState == GAME_CHECKMATE_BLACK ||
+                g_gameState == GAME_STALEMATE ||
+                g_gameState == GAME_NOT_STARTED)
+            {
+                break;
+            }
+
+            if (g_gameMode == MODE_AI && g_currentTurn == BLACK)
+            {
+                break;
+            }
+
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+
+            int col = (x - BOARD_OFFSET) / CELL_SIZE;
+            int row = (y - BOARD_OFFSET) / CELL_SIZE;
+
+            if (!IsValidPosition(row, col))
+            {
+                g_hasSelection = false;
+                g_validMoves.clear();
+                InvalidateRect(hWnd, NULL, FALSE);
+                break;
+            }
+
+            ChessPiece clickedPiece = GetPiece(row, col);
+
+            if (g_hasSelection)
+            {
+                bool isValidMove = false;
+                for (size_t i = 0; i < g_validMoves.size(); i++)
+                {
+                    if (g_validMoves[i] == Position(row, col))
+                    {
+                        isValidMove = true;
+                        break;
+                    }
+                }
+
+                if (isValidMove)
+                {
+                    MakeMove(g_selectedPos.row, g_selectedPos.col, row, col);
+                    g_hasSelection = false;
+                    g_validMoves.clear();
+
+                    g_currentTurn = (g_currentTurn == WHITE) ? BLACK : WHITE;
+                    UpdateGameState();
+
+                    InvalidateRect(hWnd, NULL, FALSE);
+
+                    if (g_gameState == GAME_CHECKMATE_WHITE)
+                    {
+                        MessageBox(hWnd, _T("黑方获胜！白方被将死。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                    }
+                    else if (g_gameState == GAME_CHECKMATE_BLACK)
+                    {
+                        MessageBox(hWnd, _T("白方获胜！黑方被将死。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                    }
+                    else if (g_gameState == GAME_STALEMATE)
+                    {
+                        MessageBox(hWnd, _T("和棋！无子可动。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                    }
+                    else if (g_gameMode == MODE_AI && g_currentTurn == BLACK)
+                    {
+                        AITurn();
+                        g_currentTurn = WHITE;
+                        UpdateGameState();
+                        InvalidateRect(hWnd, NULL, FALSE);
+
+                        if (g_gameState == GAME_CHECKMATE_WHITE)
+                        {
+                            MessageBox(hWnd, _T("黑方获胜！白方被将死。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                        }
+                        else if (g_gameState == GAME_CHECKMATE_BLACK)
+                        {
+                            MessageBox(hWnd, _T("白方获胜！黑方被将死。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                        }
+                        else if (g_gameState == GAME_STALEMATE)
+                        {
+                            MessageBox(hWnd, _T("和棋！无子可动。"), _T("游戏结束"), MB_OK | MB_ICONINFORMATION);
+                        }
+                    }
+                }
+                else if (clickedPiece.type != EMPTY && clickedPiece.color == g_currentTurn)
+                {
+                    g_selectedPos = Position(row, col);
+                    GetValidMoves(row, col, g_validMoves);
+                    InvalidateRect(hWnd, NULL, FALSE);
+                }
+                else
+                {
+                    g_hasSelection = false;
+                    g_validMoves.clear();
+                    InvalidateRect(hWnd, NULL, FALSE);
+                }
+            }
+            else
+            {
+                if (clickedPiece.type != EMPTY && clickedPiece.color == g_currentTurn)
+                {
+                    g_selectedPos = Position(row, col);
+                    g_hasSelection = true;
+                    GetValidMoves(row, col, g_validMoves);
+                    InvalidateRect(hWnd, NULL, FALSE);
+                }
+            }
+        }
+        break;
+
     case WM_PAINT:
         {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
-            // TODO: 在此处添加使用 hdc 的任何绘图代码...
+
+            if (!g_bBufferCreated)
+                CreateBuffer(hWnd);
+
+            RECT rect;
+            GetClientRect(hWnd, &rect);
+
+            HBRUSH hBrush = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+            FillRect(g_hdcBuffer, &rect, hBrush);
+            DeleteObject(hBrush);
+
+            DrawBoard(g_hdcBuffer);
+
+            for (int row = 0; row < BOARD_SIZE; row++)
+            {
+                for (int col = 0; col < BOARD_SIZE; col++)
+                {
+                    ChessPiece piece = GetPiece(row, col);
+                    if (piece.type != EMPTY)
+                    {
+                        DrawPiece(g_hdcBuffer, row, col, piece);
+                    }
+                }
+            }
+
+            DrawValidMoves(g_hdcBuffer);
+
+            if (g_gameState != GAME_NOT_STARTED)
+            {
+                TCHAR statusText[256];
+                if (g_gameState == GAME_CHECK_WHITE || g_gameState == GAME_CHECK_BLACK)
+                {
+                    StringCchPrintf(statusText, 256, _T("%s回合 - 将军！"),
+                        (g_currentTurn == WHITE) ? _T("白方") : _T("黑方"));
+                }
+                else
+                {
+                    StringCchPrintf(statusText, 256, _T("%s回合"),
+                        (g_currentTurn == WHITE) ? _T("白方") : _T("黑方"));
+                }
+
+                SetTextColor(g_hdcBuffer, RGB(0, 0, 0));
+                SetBkMode(g_hdcBuffer, TRANSPARENT);
+
+                HFONT hFont = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                          CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                          DEFAULT_PITCH | FF_DONTCARE, _T("MS Shell Dlg"));
+                HFONT hOldFont = (HFONT)SelectObject(g_hdcBuffer, hFont);
+
+                TextOut(g_hdcBuffer, BOARD_OFFSET, BOARD_OFFSET + BOARD_SIZE * CELL_SIZE + 10,
+                        statusText, (int)_tcslen(statusText));
+
+                SelectObject(g_hdcBuffer, hOldFont);
+                DeleteObject(hFont);
+            }
+            else
+            {
+                TCHAR startText[] = _T("点击 游戏->开始 开始游戏");
+                SetTextColor(g_hdcBuffer, RGB(128, 128, 128));
+                SetBkMode(g_hdcBuffer, TRANSPARENT);
+
+                HFONT hFont = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                          CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                          DEFAULT_PITCH | FF_DONTCARE, _T("MS Shell Dlg"));
+                HFONT hOldFont = (HFONT)SelectObject(g_hdcBuffer, hFont);
+
+                TextOut(g_hdcBuffer, BOARD_OFFSET, BOARD_OFFSET + BOARD_SIZE * CELL_SIZE + 10,
+                        startText, (int)_tcslen(startText));
+
+                SelectObject(g_hdcBuffer, hOldFont);
+                DeleteObject(hFont);
+            }
+
+            BitBlt(hdc, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
+                   g_hdcBuffer, 0, 0, SRCCOPY);
+
             EndPaint(hWnd, &ps);
         }
         break;
+
     case WM_DESTROY:
+        DestroyBuffer();
         PostQuitMessage(0);
         break;
+
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
     return 0;
 }
 
-// “关于”框的消息处理程序。
 INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
     UNREFERENCED_PARAMETER(lParam);
@@ -177,4 +1267,158 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     }
     return (INT_PTR)FALSE;
+}
+
+INT_PTR CALLBACK ConfigDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(lParam);
+    switch (message)
+    {
+    case WM_INITDIALOG:
+        CheckRadioButton(hDlg, IDM_MODE_HUMAN, IDM_MODE_AI,
+            (g_gameMode == MODE_TWO_PLAYER) ? IDM_MODE_HUMAN : IDM_MODE_AI);
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        {
+            int wmId = LOWORD(wParam);
+            switch (wmId)
+            {
+            case IDOK:
+                if (IsDlgButtonChecked(hDlg, IDM_MODE_HUMAN))
+                {
+                    g_gameMode = MODE_TWO_PLAYER;
+                }
+                else
+                {
+                    g_gameMode = MODE_AI;
+                }
+                EndDialog(hDlg, IDOK);
+                return (INT_PTR)TRUE;
+
+            case IDCANCEL:
+                EndDialog(hDlg, IDCANCEL);
+                return (INT_PTR)TRUE;
+            }
+        }
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+int EvaluatePosition()
+{
+    int score = 0;
+
+    for (int row = 0; row < BOARD_SIZE; row++)
+    {
+        for (int col = 0; col < BOARD_SIZE; col++)
+        {
+            ChessPiece piece = GetPiece(row, col);
+            if (piece.type != EMPTY)
+            {
+                int value = EvaluatePiece(piece.type);
+                if (piece.color == BLACK)
+                    score += value;
+                else
+                    score -= value;
+            }
+        }
+    }
+
+    return score;
+}
+
+int EvaluatePiece(ChessPieceType type)
+{
+    switch (type)
+    {
+    case PAWN:   return 100;
+    case KNIGHT: return 320;
+    case BISHOP: return 330;
+    case ROOK:   return 500;
+    case QUEEN:  return 900;
+    case KING:   return 20000;
+    default:     return 0;
+    }
+}
+
+void AITurn()
+{
+    std::vector<std::pair<Position, Position>> allMoves;
+
+    for (int row = 0; row < BOARD_SIZE; row++)
+    {
+        for (int col = 0; col < BOARD_SIZE; col++)
+        {
+            ChessPiece piece = GetPiece(row, col);
+            if (piece.color == BLACK && piece.type != EMPTY)
+            {
+                std::vector<Position> moves;
+                GetValidMoves(row, col, moves);
+                for (size_t i = 0; i < moves.size(); i++)
+                {
+                    allMoves.push_back(std::make_pair(Position(row, col), moves[i]));
+                }
+            }
+        }
+    }
+
+    if (allMoves.empty())
+        return;
+
+    int bestScore = -100000;
+    std::pair<Position, Position> bestMove = allMoves[0];
+
+    for (size_t i = 0; i < allMoves.size(); i++)
+    {
+        Position from = allMoves[i].first;
+        Position to = allMoves[i].second;
+
+        ChessPiece originalFrom = GetPiece(from.row, from.col);
+        ChessPiece originalTo = GetPiece(to.row, to.col);
+        Position originalWhiteKing = g_whiteKingPos;
+        Position originalBlackKing = g_blackKingPos;
+
+        bool fromHasMoved = originalFrom.hasMoved;
+
+        ChessPiece movingPiece = originalFrom;
+        movingPiece.hasMoved = true;
+
+        if (CanPromote(to.row, movingPiece.type, movingPiece.color))
+        {
+            movingPiece.type = QUEEN;
+        }
+
+        SetPiece(to.row, to.col, movingPiece);
+        SetPiece(from.row, from.col, ChessPiece());
+
+        int score = EvaluatePosition();
+
+        if (IsKingInCheck(WHITE))
+        {
+            score += 50;
+        }
+
+        SetPiece(from.row, from.col, originalFrom);
+        g_board[from.row][from.col].hasMoved = fromHasMoved;
+        SetPiece(to.row, to.col, originalTo);
+        g_whiteKingPos = originalWhiteKing;
+        g_blackKingPos = originalBlackKing;
+
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestMove = allMoves[i];
+        }
+        else if (score == bestScore)
+        {
+            if (rand() % 2 == 0)
+            {
+                bestMove = allMoves[i];
+            }
+        }
+    }
+
+    MakeMove(bestMove.first.row, bestMove.first.col, bestMove.second.row, bestMove.second.col);
 }
