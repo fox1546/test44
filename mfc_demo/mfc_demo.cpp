@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <cmath>
 
 #define MAX_LOADSTRING 100
 
@@ -824,13 +825,18 @@ void DrawBoard(HDC hdc)
 
     if (g_hasLastMove)
     {
+        int fromX = BOARD_OFFSET + g_lastMovedFrom.col * CELL_SIZE + CELL_SIZE / 2;
+        int fromY = BOARD_OFFSET + g_lastMovedFrom.row * CELL_SIZE + CELL_SIZE / 2;
+        int toX = BOARD_OFFSET + g_lastMovedTo.col * CELL_SIZE + CELL_SIZE / 2;
+        int toY = BOARD_OFFSET + g_lastMovedTo.row * CELL_SIZE + CELL_SIZE / 2;
+
+        COLORREF highlight = RGB(255, 255, 128);
         for (int i = 0; i < 2; i++)
         {
             Position pos = (i == 0) ? g_lastMovedFrom : g_lastMovedTo;
             int x = BOARD_OFFSET + pos.col * CELL_SIZE;
             int y = BOARD_OFFSET + pos.row * CELL_SIZE;
 
-            COLORREF highlight = RGB(255, 255, 128);
             HBRUSH hBrush = CreateSolidBrush(highlight);
             SetBkMode(hdc, TRANSPARENT);
 
@@ -850,6 +856,32 @@ void DrawBoard(HDC hdc)
             DeleteDC(hdcTemp);
             DeleteObject(hBrush);
         }
+
+        HPEN hPen = CreatePen(PS_SOLID, 3, RGB(0, 100, 255));
+        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+
+        MoveToEx(hdc, fromX, fromY, NULL);
+        LineTo(hdc, toX, toY);
+
+        double angle = atan2((double)(toY - fromY), (double)(toX - fromX));
+        int arrowLength = 15;
+        int arrowWidth = 8;
+
+        double angle1 = angle + 3.14159 - 0.4;
+        double angle2 = angle + 3.14159 + 0.4;
+
+        POINT arrowPoints[3];
+        arrowPoints[0].x = toX;
+        arrowPoints[0].y = toY;
+        arrowPoints[1].x = toX + (int)(arrowLength * cos(angle1));
+        arrowPoints[1].y = toY + (int)(arrowLength * sin(angle1));
+        arrowPoints[2].x = toX + (int)(arrowLength * cos(angle2));
+        arrowPoints[2].y = toY + (int)(arrowLength * sin(angle2));
+
+        Polygon(hdc, arrowPoints, 3);
+
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hPen);
     }
 
     for (int i = 0; i < BOARD_SIZE; i++)
@@ -1414,29 +1446,7 @@ bool AITurn()
         }
     }
 
-    const TCHAR* pieceNames[] = { _T(""), _T("兵"), _T("车"), _T("马"), _T("象"), _T("后"), _T("王") };
-    ChessPiece movingPiece = GetPiece(bestMove.first.row, bestMove.first.col);
-    const TCHAR* pieceName = _T("");
-    if (movingPiece.type >= PAWN && movingPiece.type <= KING)
-    {
-        pieceName = pieceNames[movingPiece.type];
-    }
-
-    TCHAR fromColChar = _T('a') + bestMove.first.col;
-    TCHAR fromRowChar = _T('8') - bestMove.first.row;
-    TCHAR toColChar = _T('a') + bestMove.second.col;
-    TCHAR toRowChar = _T('8') - bestMove.second.row;
-
-    TCHAR message[256];
-    StringCchPrintf(message, 256, _T("电脑移动：%s 从 %c%c 到 %c%c"),
-        pieceName, fromColChar, fromRowChar, toColChar, toRowChar);
-
     bool capturedKing = MakeMove(bestMove.first.row, bestMove.first.col, bestMove.second.row, bestMove.second.col);
-
-    if (!capturedKing)
-    {
-        MessageBox(GetForegroundWindow(), message, _T("电脑回合"), MB_OK | MB_ICONINFORMATION);
-    }
 
     return capturedKing;
 }
